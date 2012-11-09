@@ -23,6 +23,7 @@ $txt['PtM_menu'] = 'Mod creation script';
 $txt['add_a_file'] = 'Add a file';
 $txt['add_new_space'] = 'Add new space';
 $txt['path_not_writable'] = 'The configured path is not writable or doesn\'t exist';
+$txt['error_file_upload'] = 'An error occurred while uploading a file';
 $txt['cannot_create_package'] = 'Cannot create the zip package';
 $txt['package_creation_failed'] = 'Package creation failed with the following code: %1$s';
 $txt['package_not_found'] = 'Cannot find the package you are looking for';
@@ -188,8 +189,7 @@ function do_create ()
 		@mkdir($create_path);
 	if (!file_exists($create_path) || !is_writable($create_path))
 		fatal_error($txt['path_not_writable'], false);
-	$context['clean_name'] = htmlspecialchars(str_replace(array(' ', ',', ':', '.', ';', '#', '@', '='), array('_'), $context['mod_name']));
-	$current_path = $create_path . '/' . $context['clean_name'];
+	$current_path = $create_path;
 
 	// Let's start fresh everytime
 	if (file_exists($current_path))
@@ -203,244 +203,42 @@ function do_create ()
 		fatal_error($txt['path_not_writable'], false);
 	$context['current_path'] = $current_path;
 
-	if (!prepare_files())
+	$mod = new Create_from_git_diff();
+	$mod->prepare_files();
+
+	// Something may go wrong with the upload, better check
+	if ($mod->hasError())
 		return;
-	create_mod_xml();
-	create_package_xml();
-	// Everything seems fine, now it's time to package everything
-	create_package();
+
+	$mod->setModName($context['mod_name'])
+		->setAuthor($context['mod_author'])
+		->setVersion($context['mod_version'])
+		->addSupportedSMF($context['mod_smf_selected_version'])
+		->setPath($context['current_path'])
+		->setPatchFile($context['mod_current_file']);
+
+	if ($mod->hasError())
+		show_errors($mod->getFirstError());
+
+	$mod->create_mod_xml()
+		->create_package_xml();
+
+	if ($mod->hasError())
+		show_errors($mod->getFirstError());
+
+	// Everything seems fine, now it's time to package everything and remove most of the files
+	$mod->create_package()->clean_uploaded_files()->clean_other_files();
+
 	$context['creation_done'] = true;
-	$context['download_url'] = $boardurl . '/patch_to_mod.php?download=' . $context['clean_name'];
+	$context['download_url'] = $boardurl . '/patch_to_mod.php?download=' . $mod->clean_mod_name;
 }
 
-function create_package ()
+function show_errors ($err)
 {
-	global $context, $txt;
-
-
-	$zip_package = $context['current_path'] . '/' . $context['clean_name'] . '.zip';
-
-	if (file_exists($zip_package))
-		@unlink($zip_package);
-	if (file_exists($zip_package))
-		fatal_error($txt['cannot_create_package'], false);
-
-	$zip = new ZipArchive();
-	$error = $zip->open($zip_package, ZIPARCHIVE::CREATE);
-	if ($error !== true)
-		fatal_error(sprintf($txt['package_creation_failed'], $error), false);
-
-	if (!empty($context['up_files']))
-		foreach ($context['up_files'] as $file)
-			$zip->addFile($context['current_path'] . '/' . $file['name'], $file['name']);
-	if (!empty($context['modifications']))
-			$zip->addFile($context['current_path'] . '/modifications.xml', 'modifications.xml');
-	if (!empty($context['up_files']) || !empty($context['modifications']))
-			$zip->addFile($context['current_path'] . '/package-info.xml', 'package-info.xml');
-
-	$zip->close();
-}
-
-function prepare_files ()
-{
-	global $context, $sourcedir;
-
-	$destinations = array(
-		'source' => '$sourcedir',
-		'board' => '$boarddir',
-		'theme' => '$themedir',
-		'language' => '$languagedir',
-		'image' => '$imagesdir',
-	);
-
-	if (!empty($_FILES['mod_file']))
-	{
-		$context['up_files'] = array();
-		foreach ($_FILES['mod_file']['name'] as $key => $file)
-		{
-			// Something wrong, stop here and go back to the upload screen
-			if (!empty($_FILES['mod_patch']['error'][$key]))
-				return false;
-
-			// If no files are specified the array contains an empty item
-			if (empty($_FILES['mod_file']['tmp_name'][$key]))
-				continue;
-
-			// That one goes into a subdir
-			if (isset($_POST['mod_file_subdir'][$key]))
-				$context['up_files'][$key]['sub_dir'] = $_POST['mod_file_subdir'][$key];
-			// Let's see where this should go
-			if (isset($_POST['mod_file_type'][$key]))
-				$context['up_files'][$key]['type'] = $destinations[$_POST['mod_file_type'][$key]];
-			// And finally where the file actually is and its name
-			$context['up_files'][$key]['path'] = $_FILES['mod_file']['tmp_name'][$key];
-			$context['up_files'][$key]['name'] = $_FILES['mod_file']['name'][$key];
-		}
-
-		// Let's not make things too complex for the moment: all the files go to the same location
-		foreach ($context['up_files'] as $data)
-			move_uploaded_file($data['path'], $context['current_path'] . '/' . $data['name']);
-	}
-	return true;
-}
-
-function create_package_xml ()
-{
-	global $context;
-
-	$context['install_for'] = htmlspecialchars(substr($context['mod_smf_selected_version'], 4, 3) . ' - ' . substr($context['mod_smf_selected_version'], 4, 3) . '.99');
-
-	$write = '<?xml version="1.0"?>
-<!DOCTYPE package-info SYSTEM "http://www.simplemachines.org/xml/package-info">
-<package-info xmlns="http://www.simplemachines.org/xml/package-info" xmlns:smf="http://www.simplemachines.org/">
-	<id>' . htmlspecialchars($context['mod_author']) . ':' . $context['clean_name'] . '</id>
-	<name>' . htmlspecialchars($context['mod_name']) . '</name>
-	<version>' . htmlspecialchars($context['mod_version']) . '</version>
-	<type>modification</type>';
-
-	foreach (array('install', 'uninstall') as $action)
-	{
-		$write .= '
-	<' . $action . ' for="' . $context['install_for'] . '">';
-		if (!empty($context['up_files']))
-		{
-			foreach ($context['up_files'] as $upfile)
-			{
-				if ($upfile['type'] == 'code' || ($upfile['type'] == 'code_unin' && $action == 'uninstall'))
-					$write .= '
-		<code>' . $upfile['name'] . '</code>';
-				elseif ($upfile['type'] == 'database' && $action == 'install')
-					$write .= '
-		<database>' . $upfile['name'] . '</database>';
-				elseif ($action == 'install')
-					$write .= '
-		<require-file name="' . $upfile['name'] . '" destination="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '" />';
-				elseif ($action == 'uninstall')
-					$write .= '
-		<remove-file name="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '/' . $upfile['name'] . '" />';
-			}
-		}
-		if (!empty($context['modifications']))
-			$write .= '
-		<modification' . ($action == 'uninstall' ? ' reverse="true"' : '') . '>modifications.xml</modification>';
-						$write .= '
-	</' . $action . '>';
-	}
-
-	$write .= '
-</package-info>';
-
-	file_put_contents($context['current_path'] . '/package-info.xml', $write);
-}
-
-function create_mod_xml ()
-{
-	global $context;
-
-	$content = file_get_contents($context['mod_current_file']);
-	$content = explode("\n", $content);
-	$operations = array();
-	$context['modifications'] = array();
-	$counter = 0;
-	$opCounter = 0;
-
-	for ($i = 0; $i < count($content); $i++)
-	{
-		if (string_starts_with($content[$i], '--- a/'))
-		{
-			$directory = substr($content[$i], 6, strpos($content[$i], '/', 7) - 6);
-			if ($directory == 'Sources')
-				$dir = '$sourcedir';
-			elseif (strpos($content[$i], 'languages') !== false)
-				$dir = '$languagedir';
-			elseif (strpos($content[$i], 'images') !== false)
-				$dir = '$imagesdir';
-			elseif (strpos($content[$i], 'default/scripts') !== false)
-				$dir = '$themedir/scripts';
-			elseif ($directory == 'Themes')
-				$dir = '$themedir';
-			else
-				$dir = '$boarddir';
-
-			$context['modifications'][$counter]['path'] = $dir . '/' . basename($content[$i]);
-			while (!string_starts_with($content[$i], '@@'))
-				$i++;
-			continue;
-		}
-		// The block of code is finished, let's create an <operation>
-		if (
-			(string_starts_with($content[$i], '@@')            // A new block
-			|| string_starts_with($content[$i], 'diff --git')  // A new file
-			|| !isset($content[$i + 1])                        // The end of the file
-			) && !empty($operations))
-		{
-			$context['modifications'][$counter]['operations'][$opCounter]['search'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $operations['search']));
-			$context['modifications'][$counter]['operations'][$opCounter]['replace'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $operations['replace']));
-			// Reset things.
-			$operations = array();
-			$opCounter++;
-			if (string_starts_with($content[$i], 'diff --git'))
-			{
-				$dir = '';
-				$counter++;
-			}
-			continue;
-		}
-		if (!empty($dir))
-		{
-			if (string_starts_with($content[$i], ' '))
-			{
-				$operations['replace'][] = $operations['search'][] = substr($content[$i], 1);
-			}
-			if (string_starts_with($content[$i], '-'))
-				$operations['search'][] = substr($content[$i], 1);
-			elseif (string_starts_with($content[$i], '+'))
-				$operations['replace'][] = substr($content[$i], 1);
-		}
-	}
-
-	if (!empty($context['modifications']))
-		write_mod_xml();
-}
-
-function write_mod_xml ()
-{
-	global $context;
-
-	$write = '<?xml version="1.0"?>
-<!DOCTYPE modification SYSTEM "http://www.simplemachines.org/xml/modification">
-<modification xmlns="http://www.simplemachines.org/xml/modification" xmlns:smf="http://www.simplemachines.org/">
-
-	<id>' . htmlspecialchars($context['mod_author']) . ':' . $context['clean_name'] . '</id>
-	<version>' . htmlspecialchars($context['mod_version']) . '</version>';
-
-	foreach ($context['modifications'] as $file)
-	{
-		$write .= '
-	<file name="' . $file['path'] . '">';
-
-		foreach ($file['operations'] as $operations)
-			$write .= '
-		<operation>
-			<search position="replace"><![CDATA[' .
-				$operations['search'] . ']]></search>
-			<add><![CDATA[' .
-				$operations['replace'] . ']]></add>
-		</operation>';
-
-		$write .= '
-	</file>';
-	}
-
-	$write .= '
-</modification>';
-
-	file_put_contents($context['current_path'] . '/modifications.xml', $write);
-}
-
-function string_starts_with ($string, $star)
-{
-	return substr($string, 0, strlen($star)) == $star;
+	if (is_array($err))
+		fatal_lang_error($err['err_code'], false, $err['sprintf']);
+	else
+		fatal_lang_error($err['err_code'], false);
 }
 
 function create_menu_button (&$buttons)
@@ -567,4 +365,482 @@ function template_create_script ()
 		<span class="lowerframe"><span></span></span>
 	</div>';
 }
+
+/**
+ * A set of useful functions that must be extended before use
+ */
+class Create_xml extends ReflectionClass
+{
+	protected $default_SMF_ver = '2.0';
+	protected $patch_file;
+	private $author;
+	private $mod_name;
+	private $version;
+	private $smf_versions = array();
+	private $create_path;
+	private $modifications = array();
+	private $opCounter = 0;
+	private $modCounter = 0;
+	private $errors = array();
+	private $up_files = array();
+	public $clean_mod_name;
+
+	public function setPatchFile ($file)
+	{
+		if (!empty($file) && file_exists($file))
+			$this->patch_file = $file;
+
+		return $this;
+	}
+	public function setAuthor ($author = 'unknown')
+	{
+		$this->author = htmlspecialchars($author);
+
+		return $this;
+	}
+	public function setModName ($name = 'unknown')
+	{
+		$this->mod_name = htmlspecialchars($name);
+		$this->clean_mod_name = htmlspecialchars(str_replace(array(' ', ',', ':', '.', ';', '#', '@', '='), array('_'), $name));
+
+		return $this;
+	}
+	public function setVersion ($ver = '1.0')
+	{
+		$this->version = $ver;
+
+		return $this;
+	}
+	public function addSupportedSMF ($ver)
+	{
+		if (empty($ver))
+			$ver = $this->default_SMF_ver;
+
+		if (!in_array($ver, $this->smf_versions))
+			array_push($this->smf_versions, htmlspecialchars(substr($ver, 4, 3) . ' - ' . substr($ver, 4, 3) . '.99'));
+
+		return $this;
+	}
+	public function setPath ($path)
+	{
+		global $sourcedir;
+
+		if (!file_exists($path))
+			@mkdir($path);
+		if (!file_exists($path) || !is_writable($path))
+			$this->addError('path_not_writable')->clean_uploaded_files();
+		$current_path = $path . '/' . $this->clean_mod_name;
+
+		// Let's start fresh everytime
+		if (file_exists($current_path))
+		{
+			require_once($sourcedir . '/Subs-Package.php');
+			deltree($current_path);
+		}
+
+		@mkdir($current_path);
+		if (!file_exists($current_path) || !is_writable($current_path))
+			$this->addError('path_not_writable')->clean_uploaded_files();
+		$this->create_path = $current_path;
+
+		return $this;
+	}
+	public function getPath ()
+	{
+		return $this->create_path;
+	}
+	protected function addModification ($type, $value)
+	{
+		$this->modifications[$this->modCounter][$type] = $value;
+
+		return $this;
+	}
+	protected function addOperation ($value)
+	{
+		$this->modifications[$this->modCounter]['operations'][$this->opCounter]['search'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $value['search']));
+		$this->modifications[$this->modCounter]['operations'][$this->opCounter]['replace'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $value['replace']));;
+
+		$this->opCounter++;
+
+		return $this;
+	}
+	public function hasError ()
+	{
+		return !empty($this->errors);
+	}
+	public function getFirstError ()
+	{
+		if (!$this->hasError())
+			return false;
+
+		return array_shift($this->errors);
+	}
+
+	public function prepare_files ()
+	{
+		$destinations = array(
+			'source' => '$sourcedir',
+			'board' => '$boarddir',
+			'theme' => '$themedir',
+			'language' => '$languagedir',
+			'image' => '$imagesdir',
+		);
+
+		if (!empty($_FILES['mod_file']))
+		{
+			$this->up_files = array();
+			foreach ($_FILES['mod_file']['name'] as $key => $file)
+			{
+				$file = array();
+				// Something wrong, stop here and go back
+				if (!empty($_FILES['mod_patch']['error'][$key]))
+				{
+					$this->addError('error_file_upload')->clean_uploaded_files();
+					return $this;
+				}
+
+				// If no files are specified the array contains an empty item
+				if (empty($_FILES['mod_file']['tmp_name'][$key]))
+					continue;
+
+				// That one goes into a subdir
+				if (isset($_POST['mod_file_subdir'][$key]))
+					$file['sub_dir'] = $_POST['mod_file_subdir'][$key];
+				// Let's see where this should go
+				if (isset($_POST['mod_file_type'][$key]))
+					$file['type'] = $destinations[$_POST['mod_file_type'][$key]];
+				// And finally where the file actually is and its name
+				$file['path'] = $_FILES['mod_file']['tmp_name'][$key];
+				$file['name'] = $_FILES['mod_file']['name'][$key];
+				$this->addFile($file);
+			}
+
+			// Let's not make things too complex for the moment: all the files go to the same location
+			foreach ($this->up_files as $file)
+				move_uploaded_file($file['path'], $this->create_path . '/' . $file['name']);
+		}
+		return $this;
+	}
+
+	private function addFile ($file)
+	{
+		if (!empty($file))
+			array_push($this->up_files, $file);
+	}
+	private function addError ($err)
+	{
+		if (!empty($err))
+			array_push($this->errors, $err);
+
+		return $this;
+	}
+
+	public function clean_uploaded_files ()
+	{
+		if (!empty($this->up_files))
+			foreach ($this->up_files as $file)
+				@unlink($this->create_path . '/' . $file['name']);
+		$this->up_files = array();
+
+		if (!empty($_FILES['mod_file']))
+			foreach ($_FILES['mod_file']['tmp_name'] as $key => $file)
+				@unlink($file);
+
+		return $this;
+	}
+	public function clean_other_files ()
+	{
+		$files = array('package-info.xml', 'modifications.xml');
+		foreach ($files as $file)
+			if (file_exists($this->create_path . '/' . $file))
+				@unlink($this->create_path . '/' . $file);
+
+		return $this;
+	}
+
+	public function create_package ()
+	{
+		$zip_package = $this->create_path . '/' . $this->clean_mod_name . '.zip';
+
+		if (file_exists($zip_package))
+			@unlink($zip_package);
+		if (file_exists($zip_package))
+			$this->addError('cannot_create_package');
+
+		$zip = new ZipArchive();
+		$error = $zip->open($zip_package, ZIPARCHIVE::CREATE);
+		if ($error !== true)
+			$this->addError(array('err_code' => 'package_creation_failed', 'sprintf' => $error));
+
+		// All the uploaded files
+		if (!empty($this->up_files))
+			foreach ($this->up_files as $file)
+				$zip->addFile($this->create_path . '/' . $file['name'], $file['name']);
+
+		// the modifications.xml
+		if (!empty($this->modifications))
+				$zip->addFile($this->create_path . '/modifications.xml', 'modifications.xml');
+
+		// package-info.xml
+		if (!empty($this->up_files) || !empty($this->modifications))
+				$zip->addFile($this->create_path . '/package-info.xml', 'package-info.xml');
+
+		$zip->close();
+
+		return $this;
+	}
+
+	public function write_mod_xml ()
+	{
+		$write = '<?xml version="1.0"?>
+	<!DOCTYPE modification SYSTEM "http://www.simplemachines.org/xml/modification">
+	<modification xmlns="http://www.simplemachines.org/xml/modification" xmlns:smf="http://www.simplemachines.org/">
+
+		<id>' . $this->author . ':' . $this->clean_mod_name . '</id>
+		<version>' . $this->version . '</version>';
+
+		foreach ($this->modifications as $file)
+		{
+			$write .= '
+		<file name="' . $file['path'] . '">';
+
+			foreach ($file['operations'] as $operations)
+				$write .= '
+			<operation>
+				<search position="replace"><![CDATA[' .
+					$operations['search'] . ']]></search>
+				<add><![CDATA[' .
+					$operations['replace'] . ']]></add>
+			</operation>';
+
+			$write .= '
+		</file>';
+		}
+
+		$write .= '
+	</modification>';
+
+		file_put_contents($this->create_path . '/modifications.xml', $write);
+
+		return $this;
+	}
+
+	public function create_package_xml ()
+	{
+		$write = '<?xml version="1.0"?>
+	<!DOCTYPE package-info SYSTEM "http://www.simplemachines.org/xml/package-info">
+	<package-info xmlns="http://www.simplemachines.org/xml/package-info" xmlns:smf="http://www.simplemachines.org/">
+		<id>' . $this->author . ':' . $this->clean_mod_name . '</id>
+		<name>' . $this->mod_name . '</name>
+		<version>' . $this->version . '</version>
+		<type>modification</type>';
+
+		foreach ($this->smf_versions as $smf_version)
+			foreach (array('install', 'uninstall') as $action)
+			{
+				$write .= '
+			<' . $action . ' for="' . $smf_version . '">';
+
+				if (!empty($this->up_files))
+				{
+					foreach ($this->up_files as $upfile)
+					{
+						if ($upfile['type'] == 'code' || ($upfile['type'] == 'code_unin' && $action == 'uninstall'))
+							$write .= '
+				<code>' . $upfile['name'] . '</code>';
+						elseif ($upfile['type'] == 'database' && $action == 'install')
+							$write .= '
+				<database>' . $upfile['name'] . '</database>';
+						elseif ($action == 'install')
+							$write .= '
+				<require-file name="' . $upfile['name'] . '" destination="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '" />';
+						elseif ($action == 'uninstall')
+							$write .= '
+				<remove-file name="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '/' . $upfile['name'] . '" />';
+					}
+				}
+				if (!empty($this->modifications))
+					$write .= '
+				<modification' . ($action == 'uninstall' ? ' reverse="true"' : '') . '>modifications.xml</modification>';
+								$write .= '
+			</' . $action . '>';
+			}
+
+		$write .= '
+	</package-info>';
+
+		file_put_contents($this->create_path . '/package-info.xml', $write);
+
+		return $this;
+	}
+
+	public function string_starts_with ($string, $star)
+	{
+		return substr($string, 0, strlen($star)) == $star;
+	}
+	public function abs_dir_to_var ($directory, $subdir)
+	{
+		if (empty($directory))
+			return false;
+
+		if ($subdir == 'Sources')
+			$dir = '$sourcedir';
+		elseif (strpos($directory, 'languages') !== false)
+			$dir = '$languagedir';
+		elseif (strpos($directory, 'images') !== false)
+			$dir = '$imagesdir';
+		elseif (strpos($directory, 'default/scripts') !== false)
+			$dir = '$themedir/scripts';
+		elseif ($subdir == 'Themes')
+			$dir = '$themedir';
+		else
+			$dir = '$boarddir';
+
+		return $dir;
+	}
+	protected function hasModifications ()
+	{
+		return !empty($this->modifications);
+	}
+	protected function is_end_of_operation ()
+	{
+		$methods = new ReflectionClass($this->getClassName());
+		$return = false;
+		foreach ($methods->getMethods() as $method)
+		{
+			if (substr($method->name, 0, 4) === 'EOOP')
+				$return = $return || call_user_func_array(array($this, $method->name), array());
+		}
+
+		return $return;
+	}
+	protected function increase_counter ()
+	{
+		$this->modCounter++;
+
+		return $this;
+	}
+}
+
+class Create_from_git_diff extends Create_xml
+{
+	private $content = array();
+	private $lines = 0;
+	private $current_line = '';
+	private $current_pos = 0;
+
+	public function getClassName ()
+	{
+		return __CLASS__;
+	}
+
+	public function create_mod_xml ()
+	{
+		// Technically this is useless...but, maybe in the future...
+		if (empty($this->content))
+			$this->readInputFile();
+
+		$operations = array();
+
+		for ($this->current_pos = 0; $this->current_pos < $this->lines; $this->current_pos++)
+		{
+			$this->current_line = $this->content[$this->current_pos];
+			if ($this->line_starts_with('--- a/'))
+			{
+				$dir = $this->abs_dir_to_var($this->current_line, substr($this->current_line, 6, strpos($this->current_line, '/', 7) - 6));
+
+				$this->addModification('path', $dir . '/' . basename($this->current_line));
+				while (!$this->line_starts_with('@@'))
+					$this->readNextLine();
+				continue;
+			}
+			// The block of code is finished, let's add an <operation>
+			if ($this->is_end_of_operation() && !empty($operations))
+			{
+				$this->addOperation($operations);
+				// Reset things.
+				$operations = array();
+				if ($this->line_starts_with('diff --git'))
+				{
+					$dir = '';
+					$this->increase_counter();
+				}
+				continue;
+			}
+			if (!empty($dir))
+			{
+				if ($this->line_starts_with(' '))
+					$operations['replace'][] = $operations['search'][] = $this->get_line_text();
+				elseif ($this->line_starts_with('-'))
+					$operations['search'][] = $this->get_line_text();
+				elseif ($this->line_starts_with('+'))
+					$operations['replace'][] = $this->get_line_text();
+			}
+		}
+
+		if ($this->hasModifications())
+			$this->write_mod_xml();
+
+		return $this;
+	}
+
+	private function readInputFile ()
+	{
+		$content = file_get_contents($this->patch_file);
+		$this->content = explode("\n", $content);
+		$this->lines = count($this->content);
+
+		return $this;
+	}
+	private function line_starts_with ($start)
+	{
+		if (isset($this->current_line) && $this->current_line !== null)
+			return $this->string_starts_with($this->current_line, $start);
+		else
+			return false;
+	}
+	private function readNextLine ()
+	{
+		$this->current_pos++;
+		if (isset($this->content[$this->current_pos]))
+			$this->current_line = $this->content[$this->current_pos];
+		else
+			$this->current_line = null;
+
+		return $this;
+	}
+	private function next_line_exists ()
+	{
+		return isset($this->content[$this->current_pos + 1]);
+	}
+	private function get_line_text ()
+	{
+		return substr($this->current_line, 1);
+	}
+	protected function EOOP_new_block ($line)
+	{
+		if ($this->line_starts_with('@@'))
+			return true;
+		return false;
+	}
+	protected function EOOP_new_file ($line)
+	{
+		if ($this->line_starts_with('diff --git'))
+			return true;
+		return false;
+	}
+	protected function EOOP_alt_new_file ($line)
+	{
+		if ($this->line_starts_with('--'))
+			return true;
+		return false;
+	}
+	protected function EOOP_has_another_line ($line)
+	{
+		if ($this->next_line_exists())
+			return false;
+		return true;
+	}
+}
+
 ?>
