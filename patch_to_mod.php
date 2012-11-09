@@ -369,7 +369,7 @@ function template_create_script ()
 /**
  * A set of useful functions that must be extended before use
  */
-class Create_xml extends ReflectionClass
+class Create_xml
 {
 	protected $default_SMF_ver = '2.0';
 	protected $patch_file;
