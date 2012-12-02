@@ -59,6 +59,13 @@ function create_mod ()
 {
 	global $context, $smcFunc, $boardurl, $create_path, $txt;
 
+	$classes = get_declared_classes();
+	$available_methods = array();
+	$class_prefix = 'Create_from_';
+	foreach ($classes as $class)
+		if (substr($class, 0, strlen($class_prefix)) == $class_prefix && defined($class . '::description'))
+			$available_methods[$class] = $class::description;
+
 	// Guess is fun
 	if (empty($create_path))
 		$create_path = dirname(__FILE__) . '/Packages/create';
@@ -141,10 +148,13 @@ function create_mod ()
 	}
 
 	$context['mod_patch'] = isset($_FILES['mod_patch']) && empty($_FILES['mod_patch']['error']);
+	$context['mod_patch_type'] = !empty($_POST['mod_patch_type']) && isset($available_methods[$_POST['mod_patch_type']]) ? $_POST['mod_patch_type'] : '';
 	$context['mod_name'] = !empty($_POST['mod_name']) ? $smcFunc['htmlspecialchars']($_POST['mod_name']) : '';
 	$context['mod_author'] = !empty($_POST['mod_author']) ? $smcFunc['htmlspecialchars']($_POST['mod_author']) : '';
 	$context['mod_version'] = !empty($_POST['mod_version']) ? $smcFunc['htmlspecialchars']($_POST['mod_version']) : '';
 	$context['mod_smf_version'] = !empty($_POST['mod_smf_version']) ? (int) $_POST['mod_smf_version'] : '';
+
+	$context['available_types'] = $available_methods;
 
 	$context['smf_versions'] = array(
 		1 => 'SMF 1.0.x',
@@ -177,7 +187,7 @@ function create_mod ()
 		}
 	</style>';
 
-	if (!empty($context['mod_patch']) && !empty($context['mod_name']) && !empty($context['mod_author']) && !empty($context['mod_version']) && !empty($context['mod_smf_version']))
+	if (!empty($context['mod_patch']) && !empty($context['mod_name']) && !empty($context['mod_patch_type']) && !empty($context['mod_author']) && !empty($context['mod_version']) && !empty($context['mod_smf_version']))
 		do_create();
 }
 
@@ -203,7 +213,7 @@ function do_create ()
 		fatal_error($txt['path_not_writable'], false);
 	$context['current_path'] = $current_path;
 
-	$mod = new Create_from_git_diff();
+	$mod = new $context['mod_patch_type']();
 	$mod->prepare_files();
 
 	// Something may go wrong with the upload, better check
@@ -281,7 +291,14 @@ function template_create_script ()
 						<strong>Please select the patch file:</strong>
 					</dt>
 					<dd>
-						<input type="file" size="40" name="mod_patch" id="mod_patch" class="input_file" /> (<a href="javascript:void(0);" onclick="cleanFileInput(\'mod_patch\');">Remove file</a>)
+						<input type="file" size="40" name="mod_patch" id="mod_patch" class="input_file" /> (<a href="javascript:void(0);" onclick="cleanFileInput(\'mod_patch\');">Remove file</a>)',
+						'&nbsp;
+						<select name="mod_patch_type">';
+		foreach ($context['available_types'] as $class => $desc)
+			echo '
+							<option value="', $class, '"', $context['mod_patch_type'] == $class ? ' selected="selected"' : '', '>', $desc, '</option>';
+		echo '
+						</select>
 					</dd>
 					<dt', empty($context['mod_name']) ? ' class="error"' : '', '>
 						<strong><label for="mod_name">Mod name:</label></strong>
@@ -822,6 +839,7 @@ class Create_xml
 
 class Create_from_git_diff extends Create_xml
 {
+	const description = 'from git diff';
 	private $content = array();
 	private $lines = 0;
 	private $current_line = '';
