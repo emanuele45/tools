@@ -457,12 +457,62 @@ class Create_xml
 	}
 	protected function addOperation ($value)
 	{
+		if (!empty($this->currentFileContent))
+			$value = $this->optimizeOperation($value);
 		$this->modifications[$this->modCounter]['operations'][$this->opCounter]['search'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $value['search']));
 		$this->modifications[$this->modCounter]['operations'][$this->opCounter]['replace'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $value['replace']));;
 
 		$this->opCounter++;
 
 		return $this;
+	}
+	protected function optimizeOperation ($value, $reverse = true)
+	{
+		// start from the bottom of the operations and reverse *again* the order later
+		if ($reverse)
+		{
+			$value = $this->optimizeOperation(array(
+				'search' => array_reverse($value['search']),
+				'replace' => array_reverse($value['replace']),
+			), false);
+			$value = array(
+				'search' => array_reverse($value['search']),
+				'replace' => array_reverse($value['replace']),
+			);
+		}
+
+		$searches = $value['search'];
+		$replaces = $value['replace'];
+
+		// Endless loops are funny! :P
+		while(true)
+		{
+			if (empty($searches) || empty($replaces))
+				break;
+
+			$search = array_shift($searches);
+			$replace = array_shift($replaces);
+			if ($search == $replace)
+			{
+				$matches = preg_match_all('/' . preg_quote(str_replace("\r", '', implode('', $searches)), '/') . '/', $this->currentFileContent, $m);
+				if ($matches == 1)
+					continue;
+				elseif ($matches > 1)
+				{
+					array_unshift($searches, $search);
+					array_unshift($replaces, $replace);
+					break;
+				}
+			}
+			// Stop as soon as we found a difference (for the moment let's keep it simple)
+			else
+			{
+				array_unshift($searches, $search);
+				array_unshift($replaces, $replace);
+				break;
+				}
+		}
+		return array('search' => $searches, 'replace' => $replaces);
 	}
 	public function hasError ()
 	{
@@ -678,10 +728,39 @@ class Create_xml
 	{
 		return substr($string, 0, strlen($star)) == $star;
 	}
+	protected function readCurrentFile ($file)
+	{
+		global $sourcedir, $boarddir, $settings;
+
+		if (substr($file, 0, 7) == 'Sources')
+			$real_path = $sourcedir . substr($file, 7);
+		elseif (substr($file, 0, 24) == 'Themes/default/languages')
+			$real_path = $settings['default_theme_dir'] . substr($file, 14);
+		elseif (substr($file, 0, 21) == 'Themes/default/images')
+			$real_path = '';
+		elseif (substr($file, 0, 22) == 'Themes/default/scripts')
+			$real_path = $settings['default_theme_dir'] . substr($file, 14);
+		elseif (substr($file, 0, 18) == 'Themes/default/css')
+			$real_path = $settings['default_theme_dir'] . substr($file, 14);
+		elseif (substr($file, 0, 14) == 'Themes/default')
+			$real_path = $settings['default_theme_dir'] . substr($file, 14);
+		elseif (substr($file, 0, 6) == 'Themes')
+			$real_path = substr($settings['default_theme_dir'], 0, -8) . substr($file, 6);
+		else
+			$real_path = $boarddir . '/' . $file;
+
+		$this->currentFileName = $real_path;
+		if (!empty($real_path))
+			$this->currentFileContent = str_replace(array("\n", "\r"), array(''), file_get_contents($real_path));
+		else
+			$this->currentFileContent = '';
+	}
 	public function abs_dir_to_var ($directory, $subdir)
 	{
 		if (empty($directory))
 			return false;
+
+		$this->readCurrentFile(substr($directory, 6));
 
 		if ($subdir == 'Sources')
 			$dir = '$sourcedir';
@@ -704,6 +783,7 @@ class Create_xml
 	}
 	protected function is_end_of_operation ()
 	{
+		// @todo: move the reflection to the initialization of the class?
 		$methods = new ReflectionClass($this->getClassName());
 		$return = false;
 		foreach ($methods->getMethods() as $method)
