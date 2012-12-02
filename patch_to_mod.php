@@ -383,7 +383,28 @@ class Create_xml
 	private $modCounter = 0;
 	private $errors = array();
 	private $up_files = array();
+	private $methods = array();
 	public $clean_mod_name;
+
+	public function getMethods ($prefix)
+	{
+		if (empty($prefix))
+			return;
+		if (!empty($this->methods[$prefix]))
+			return $this->methods[$prefix];
+
+		$methods = new ReflectionClass($this->getClassName());
+		$return = false;
+		$len = strlen($prefix);
+		$this->methods[$prefix] = array();
+		foreach ($methods->getMethods() as $method)
+		{
+			if (substr($method->name, 0, $len) === $prefix)
+				$this->methods[$prefix][] = $method->name;
+		}
+
+		return $this->methods[$prefix]
+	}
 
 	public function setPatchFile ($file)
 	{
@@ -459,6 +480,7 @@ class Create_xml
 	{
 		if (!empty($this->currentFileContent))
 			$value = $this->optimizeOperation($value);
+
 		$this->modifications[$this->modCounter]['operations'][$this->opCounter]['search'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $value['search']));
 		$this->modifications[$this->modCounter]['operations'][$this->opCounter]['replace'] = str_replace(array('<![CDATA[', ']]>'), array('<![CDA\' . \'TA[', ']\' . \']>'), implode("\n", $value['replace']));;
 
@@ -783,14 +805,10 @@ class Create_xml
 	}
 	protected function is_end_of_operation ()
 	{
-		// @todo: move the reflection to the initialization of the class?
-		$methods = new ReflectionClass($this->getClassName());
+		$methods = $this->getMethods('EOOP');
 		$return = false;
-		foreach ($methods->getMethods() as $method)
-		{
-			if (substr($method->name, 0, 4) === 'EOOP')
-				$return = $return || call_user_func_array(array($this, $method->name), array());
-		}
+		foreach ($methods as $method)
+			$return = $return || call_user_func_array(array($this, $method), array());
 
 		return $return;
 	}
