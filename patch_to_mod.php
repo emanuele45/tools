@@ -403,7 +403,7 @@ class Create_xml
 				$this->methods[$prefix][] = $method->name;
 		}
 
-		return $this->methods[$prefix]
+		return $this->methods[$prefix];
 	}
 
 	public function setPatchFile ($file)
