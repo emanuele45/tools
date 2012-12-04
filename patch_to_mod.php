@@ -390,6 +390,10 @@ class Create_xml
 {
 	protected $default_SMF_ver = '2.0';
 	protected $patch_file;
+	protected $content = array();
+	protected $lines = 0;
+	protected $current_line = '';
+	protected $current_pos = 0;
 	private $author;
 	private $mod_name;
 	private $version;
@@ -763,10 +767,6 @@ class Create_xml
 		return $this;
 	}
 
-	public function string_starts_with ($string, $star)
-	{
-		return substr($string, 0, strlen($star)) == $star;
-	}
 	protected function readCurrentFile ($file)
 	{
 		global $sourcedir, $boarddir, $settings;
@@ -794,27 +794,10 @@ class Create_xml
 		else
 			$this->currentFileContent = '';
 	}
-	public function abs_dir_to_var ($directory, $subdir)
+
+	public function string_starts_with ($string, $star)
 	{
-		if (empty($directory))
-			return false;
-
-		$this->readCurrentFile(substr($directory, 6));
-
-		if ($subdir == 'Sources')
-			$dir = '$sourcedir';
-		elseif (strpos($directory, 'languages') !== false)
-			$dir = '$languagedir';
-		elseif (strpos($directory, 'images') !== false)
-			$dir = '$imagesdir';
-		elseif (strpos($directory, 'default/scripts') !== false)
-			$dir = '$themedir/scripts';
-		elseif ($subdir == 'Themes')
-			$dir = '$themedir';
-		else
-			$dir = '$boarddir';
-
-		return $dir;
+		return substr($string, 0, strlen($star)) == $star;
 	}
 	protected function hasModifications ()
 	{
@@ -835,15 +818,45 @@ class Create_xml
 
 		return $this;
 	}
+
+	protected function readInputFile ()
+	{
+		$content = file_get_contents($this->patch_file);
+		$this->content = explode("\n", $content);
+		$this->lines = count($this->content);
+
+		return $this;
+	}
+	protected function line_starts_with ($start)
+	{
+		if (isset($this->current_line) && $this->current_line !== null)
+			return $this->string_starts_with($this->current_line, $start);
+		else
+			return false;
+	}
+	protected function readNextLine ()
+	{
+		$this->current_pos++;
+		if (isset($this->content[$this->current_pos]))
+			$this->current_line = $this->content[$this->current_pos];
+		else
+			$this->current_line = null;
+
+		return $this;
+	}
+	protected function next_line_exists ()
+	{
+		return isset($this->content[$this->current_pos + 1]);
+	}
+	protected function get_line_text ()
+	{
+		return substr($this->current_line, 1);
+	}
 }
 
 class Create_from_git_diff extends Create_xml
 {
 	const description = 'from git diff';
-	private $content = array();
-	private $lines = 0;
-	private $current_line = '';
-	private $current_pos = 0;
 
 	public function getClassName ()
 	{
@@ -900,39 +913,29 @@ class Create_from_git_diff extends Create_xml
 		return $this;
 	}
 
-	private function readInputFile ()
+	public function abs_dir_to_var ($directory, $subdir)
 	{
-		$content = file_get_contents($this->patch_file);
-		$this->content = explode("\n", $content);
-		$this->lines = count($this->content);
-
-		return $this;
-	}
-	private function line_starts_with ($start)
-	{
-		if (isset($this->current_line) && $this->current_line !== null)
-			return $this->string_starts_with($this->current_line, $start);
-		else
+		if (empty($directory))
 			return false;
-	}
-	private function readNextLine ()
-	{
-		$this->current_pos++;
-		if (isset($this->content[$this->current_pos]))
-			$this->current_line = $this->content[$this->current_pos];
-		else
-			$this->current_line = null;
 
-		return $this;
+		$this->readCurrentFile(substr($directory, 6));
+
+		if ($subdir == 'Sources')
+			$dir = '$sourcedir';
+		elseif (strpos($directory, 'languages') !== false)
+			$dir = '$languagedir';
+		elseif (strpos($directory, 'images') !== false)
+			$dir = '$imagesdir';
+		elseif (strpos($directory, 'default/scripts') !== false)
+			$dir = '$themedir/scripts';
+		elseif ($subdir == 'Themes')
+			$dir = '$themedir';
+		else
+			$dir = '$boarddir';
+
+		return $dir;
 	}
-	private function next_line_exists ()
-	{
-		return isset($this->content[$this->current_pos + 1]);
-	}
-	private function get_line_text ()
-	{
-		return substr($this->current_line, 1);
-	}
+
 	protected function EOOP_new_block ($line)
 	{
 		if ($this->line_starts_with('@@'))
@@ -953,6 +956,119 @@ class Create_from_git_diff extends Create_xml
 	}
 	protected function EOOP_has_another_line ($line)
 	{
+		if ($this->next_line_exists())
+			return false;
+		return true;
+	}
+}
+
+class Create_from_svn_patch extends Create_xml
+{
+	const description = 'from SVN patch';
+
+	public function getClassName ()
+	{
+		return __CLASS__;
+	}
+
+	public function create_mod_xml ()
+	{
+		// Technically this is useless...but, maybe in the future...
+		if (empty($this->content))
+			$this->readInputFile();
+
+		$operations = array();
+
+		for ($this->current_pos = 0; $this->current_pos < $this->lines; $this->current_pos++)
+		{
+			$this->current_line = $this->content[$this->current_pos];
+			if ($this->line_starts_with('--- '))
+			{
+				$dir = $this->abs_dir_to_var($this->current_line, substr($this->current_line, 4, strpos($this->current_line, '/', 7) - 4));
+				$current_name = substr($this->current_line, 4);
+
+				$this->addModification('path', $dir . '/' . substr($current_name, 0, strpos($current_name, "\t")));
+				while (!$this->line_starts_with('@@'))
+					$this->readNextLine();
+				continue;
+			}
+			// The block of code is finished, let's add an <operation>
+			if ($this->is_end_of_operation() && !empty($operations))
+			{
+				$this->addOperation($operations);
+				// Reset things.
+				$operations = array();
+				if ($this->line_starts_with('Index:'))
+				{
+					$dir = '';
+					$this->increase_counter();
+				}
+				continue;
+			}
+			if (!empty($dir))
+			{
+				if ($this->line_starts_with(' '))
+					$operations['replace'][] = $operations['search'][] = $this->get_line_text();
+				elseif ($this->line_starts_with('-'))
+					$operations['search'][] = $this->get_line_text();
+				elseif ($this->line_starts_with('+'))
+					$operations['replace'][] = $this->get_line_text();
+			}
+		}
+
+		if ($this->hasModifications())
+			$this->write_mod_xml();
+
+		return $this;
+	}
+
+	public function abs_dir_to_var ($directory, $subdir)
+	{
+		if (empty($directory))
+			return false;
+
+		$this->readCurrentFile(substr($directory, 4, strpos($directory, "\t") - 4));
+
+		if ($subdir == 'Sources')
+			$dir = '$sourcedir';
+		elseif (strpos($directory, 'languages') !== false)
+			$dir = '$languagedir';
+		elseif (strpos($directory, 'images') !== false)
+			$dir = '$imagesdir';
+		elseif (strpos($directory, 'default/scripts') !== false)
+			$dir = '$themedir/scripts';
+		elseif ($subdir == 'Themes')
+			$dir = '$themedir';
+		else
+			$dir = '$boarddir';
+
+		return $dir;
+	}
+
+	protected function EOOP_new_block ($line)
+	{
+		if ($this->line_starts_with('@@'))
+			return true;
+		return false;
+	}
+	protected function EOOP_new_file ($line)
+	{
+		if ($this->line_starts_with('Index:'))
+			return true;
+		return false;
+	}
+	protected function EOOP_alt_new_file ($line)
+	{
+		if ($this->line_starts_with('Property changes'))
+			return true;
+		if ($this->line_starts_with('______'))
+			return true;
+		return false;
+	}
+	protected function EOOP_has_another_line ($line)
+	{
+		if ($this->line_starts_with('Added:'))
+			return true;
 		if ($this->next_line_exists())
 			return false;
 		return true;
