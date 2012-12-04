@@ -537,7 +537,12 @@ class Create_xml
 			$replace = array_shift($replaces);
 			if ($search == $replace)
 			{
-				$matches = preg_match_all('/' . preg_quote(str_replace("\r", '', implode('', $searches)), '/') . '/', $this->currentFileContent, $m);
+				if ($reverse)
+					$pattern = '/' . preg_quote(str_replace("\r", '', implode('', $searches)), '/') . '/';
+				else
+					$pattern = '/' . preg_quote(str_replace("\r", '', implode('', array_reverse($searches))), '/') . '/';
+
+				$matches = preg_match_all($pattern, $this->currentFileContent, $m);
 				if ($matches == 1)
 					continue;
 				elseif ($matches > 1)
@@ -555,6 +560,7 @@ class Create_xml
 				break;
 				}
 		}
+
 		return array('search' => $searches, 'replace' => $replaces);
 	}
 	public function hasError ()
