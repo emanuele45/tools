@@ -692,32 +692,32 @@ class Create_xml
 	public function write_mod_xml ()
 	{
 		$write = '<?xml version="1.0"?>
-	<!DOCTYPE modification SYSTEM "http://www.simplemachines.org/xml/modification">
-	<modification xmlns="http://www.simplemachines.org/xml/modification" xmlns:smf="http://www.simplemachines.org/">
+<!DOCTYPE modification SYSTEM "http://www.simplemachines.org/xml/modification">
+<modification xmlns="http://www.simplemachines.org/xml/modification" xmlns:smf="http://www.simplemachines.org/">
 
-		<id>' . $this->author . ':' . $this->clean_mod_name . '</id>
-		<version>' . $this->version . '</version>';
+	<id>' . $this->author . ':' . $this->clean_mod_name . '</id>
+	<version>' . $this->version . '</version>';
 
 		foreach ($this->modifications as $file)
 		{
 			$write .= '
-		<file name="' . $file['path'] . '">';
+	<file name="' . $file['path'] . '">';
 
 			foreach ($file['operations'] as $operations)
 				$write .= '
-			<operation>
-				<search position="replace"><![CDATA[' .
-					$operations['search'] . ']]></search>
-				<add><![CDATA[' .
-					$operations['replace'] . ']]></add>
-			</operation>';
+		<operation>
+			<search position="replace"><![CDATA[' .
+				$operations['search'] . ']]></search>
+			<add><![CDATA[' .
+				$operations['replace'] . ']]></add>
+		</operation>';
 
 			$write .= '
-		</file>';
+	</file>';
 		}
 
 		$write .= '
-	</modification>';
+</modification>';
 
 		file_put_contents($this->create_path . '/modifications.xml', $write);
 
@@ -727,18 +727,18 @@ class Create_xml
 	public function create_package_xml ()
 	{
 		$write = '<?xml version="1.0"?>
-	<!DOCTYPE package-info SYSTEM "http://www.simplemachines.org/xml/package-info">
-	<package-info xmlns="http://www.simplemachines.org/xml/package-info" xmlns:smf="http://www.simplemachines.org/">
-		<id>' . $this->author . ':' . $this->clean_mod_name . '</id>
-		<name>' . $this->mod_name . '</name>
-		<version>' . $this->version . '</version>
-		<type>modification</type>';
+<!DOCTYPE package-info SYSTEM "http://www.simplemachines.org/xml/package-info">
+<package-info xmlns="http://www.simplemachines.org/xml/package-info" xmlns:smf="http://www.simplemachines.org/">
+	<id>' . $this->author . ':' . $this->clean_mod_name . '</id>
+	<name>' . $this->mod_name . '</name>
+	<version>' . $this->version . '</version>
+	<type>modification</type>';
 
 		foreach ($this->smf_versions as $smf_version)
 			foreach (array('install', 'uninstall') as $action)
 			{
 				$write .= '
-			<' . $action . ' for="' . $smf_version . '">';
+		<' . $action . ' for="' . $smf_version . '">';
 
 				if (!empty($this->up_files))
 				{
@@ -746,27 +746,27 @@ class Create_xml
 					{
 						if ($upfile['type'] == 'code' || ($upfile['type'] == 'code_unin' && $action == 'uninstall'))
 							$write .= '
-				<code>' . $upfile['name'] . '</code>';
+			<code>' . $upfile['name'] . '</code>';
 						elseif ($upfile['type'] == 'database' && $action == 'install')
 							$write .= '
-				<database>' . $upfile['name'] . '</database>';
+			<database>' . $upfile['name'] . '</database>';
 						elseif ($action == 'install')
 							$write .= '
-				<require-file name="' . $upfile['name'] . '" destination="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '" />';
+			<require-file name="' . $upfile['name'] . '" destination="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '" />';
 						elseif ($action == 'uninstall')
 							$write .= '
-				<remove-file name="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '/' . $upfile['name'] . '" />';
+			<remove-file name="' . $upfile['type'] . (!empty($upfile['sub_dir']) ? '/' . $upfile['sub_dir'] : '') . '/' . $upfile['name'] . '" />';
 					}
 				}
 				if (!empty($this->modifications))
 					$write .= '
-				<modification' . ($action == 'uninstall' ? ' reverse="true"' : '') . '>modifications.xml</modification>';
+			<modification' . ($action == 'uninstall' ? ' reverse="true"' : '') . '>modifications.xml</modification>';
 								$write .= '
-			</' . $action . '>';
+		</' . $action . '>';
 			}
 
 		$write .= '
-	</package-info>';
+</package-info>';
 
 		file_put_contents($this->create_path . '/package-info.xml', $write);
 
